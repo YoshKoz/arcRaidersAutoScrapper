@@ -54,6 +54,7 @@ class MenuItem:
     key: str
     label: str
     action: MenuAction
+    disabled: bool = False
 
 
 class StatusPanel(Static):
@@ -218,7 +219,7 @@ class MenuScreen(AppScreen):
         menu.focus()
 
     def _render_menu(self) -> None:
-        self._actions = {item.key: item for item in self.items}
+        self._actions = {item.key: item for item in self.items if not item.disabled}
         self._keys = [item.key for item in self.items]
         menu = self.query_one(OptionList)
         menu.set_options([self._build_option(item) for item in self.items])
@@ -231,12 +232,20 @@ class MenuScreen(AppScreen):
             text.append(item.label, style="bold #f59e0b")
         else:
             text.append(item.label)
-        return Option(text, id=item.key)
+        return Option(text, id=item.key, disabled=item.disabled)
 
     def _highlight_default(self) -> None:
         menu = self.query_one(OptionList)
+        highlighted_key = self.default_key
+        default_item = next(
+            (item for item in self.items if item.key == self.default_key), None
+        )
+        if default_item and default_item.disabled:
+            fallback = next((item for item in self.items if not item.disabled), None)
+            if fallback:
+                highlighted_key = fallback.key
         try:
-            index = self._keys.index(self.default_key)
+            index = self._keys.index(highlighted_key)
         except ValueError:
             index = 0
         menu.highlighted = index
@@ -321,6 +330,41 @@ class HomeScreen(MenuScreen):
         return
 
 
+class MaintenanceMenuScreen(MenuScreen):
+    def __init__(self) -> None:
+        super().__init__("Maintenance", [], default_key="1")
+
+    def _refresh_items(self) -> None:
+        update_used = bool(getattr(self.app, "_snapshot_update_used", False))
+        self.items = [
+            MenuItem(
+                "1",
+                "Update game data snapshot",
+                lambda screen: screen.app._open_snapshot_update(),
+                disabled=update_used,
+            ),
+            MenuItem(
+                "2",
+                "Reset saved progress",
+                lambda screen: screen.app.push_screen(ResetProgressScreen()),
+            ),
+            MenuItem(
+                "3",
+                "Reset rules to default",
+                lambda screen: screen.app.push_screen(ResetRulesScreen()),
+            ),
+            MenuItem("0", "Back", lambda screen: screen.app.pop_screen()),
+        ]
+
+    def on_mount(self) -> None:
+        self._refresh_items()
+        super().on_mount()
+
+    def on_screen_resume(self, event: events.ScreenResume) -> None:
+        self._refresh_items()
+        super().on_screen_resume(event)
+
+
 class AutoScrapperApp(App[None]):
     CSS_PATH = "app.tcss"
     TITLE = "Autoscrapper"
@@ -332,6 +376,7 @@ class AutoScrapperApp(App[None]):
         super().__init__()
         self._start_screen = start_screen
         self._scan_dry_run = scan_dry_run
+        self._snapshot_update_used = False
 
     def on_mount(self) -> None:
         self.push_screen(HomeScreen())
@@ -428,26 +473,14 @@ class AutoScrapperApp(App[None]):
         ]
         return MenuScreen("Settings", items, default_key="1")
 
+    def _open_snapshot_update(self) -> None:
+        if self._snapshot_update_used:
+            return
+        self._snapshot_update_used = True
+        self.push_screen(UpdateSnapshotScreen())
+
     def _maintenance_menu(self) -> MenuScreen:
-        items = [
-            MenuItem(
-                "1",
-                "Update game data snapshot",
-                lambda screen: screen.app.push_screen(UpdateSnapshotScreen()),
-            ),
-            MenuItem(
-                "2",
-                "Reset saved progress",
-                lambda screen: screen.app.push_screen(ResetProgressScreen()),
-            ),
-            MenuItem(
-                "3",
-                "Reset rules to default",
-                lambda screen: screen.app.push_screen(ResetRulesScreen()),
-            ),
-            MenuItem("0", "Back", lambda screen: screen.app.pop_screen()),
-        ]
-        return MenuScreen("Maintenance", items, default_key="1")
+        return MaintenanceMenuScreen()
 
 
 def run_tui(*, start_screen: str = "home", dry_run: bool = False) -> int:
