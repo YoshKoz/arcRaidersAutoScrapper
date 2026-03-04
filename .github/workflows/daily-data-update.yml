@@ -62,8 +62,8 @@ jobs:
         with:
           branch: bot/daily-data-update
           base: main
-          commit-message: chore(data): daily Metaforge snapshot + default rules
-          title: chore(data): daily Metaforge snapshot + default rules
+          commit-message: "chore(data): daily Metaforge snapshot + default rules"
+          title: "chore(data): daily Metaforge snapshot + default rules"
           body-path: artifacts/update-report.md
           labels: automated,data-update
           add-paths: |
