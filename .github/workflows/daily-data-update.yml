@@ -53,16 +53,35 @@ jobs:
       - name: Check for tracked changes
         id: changes
         run: |
-          if [[ -n "$(git status --porcelain -- \
-            src/autoscrapper/progress/data/items.json \
-            src/autoscrapper/progress/data/quests.json \
-            src/autoscrapper/progress/data/quests_by_trader.json \
-            src/autoscrapper/progress/data/metadata.json \
-            src/autoscrapper/items/items_rules.default.json)" ]]; then
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-          fi
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          report_path = Path("artifacts/update-report.json")
+          if not report_path.exists():
+              print("Missing artifacts/update-report.json", file=sys.stderr)
+              raise SystemExit(1)
+
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          snapshot = report.get("snapshot", {})
+          changed_files = snapshot.get("changedFiles", [])
+          if not isinstance(changed_files, list):
+              print("snapshot.changedFiles is not a list", file=sys.stderr)
+              raise SystemExit(1)
+
+          has_changes = bool(changed_files)
+          if has_changes:
+              print("Detected substantive tracked changes:")
+              for file_path in changed_files:
+                  print(f" - {file_path}")
+          else:
+              print("No substantive tracked changes (timestamp-only updates ignored).")
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"has_changes={'true' if has_changes else 'false'}\n")
+          PY
 
       - name: Commit and push update branch
         if: steps.changes.outputs.has_changes == 'true'

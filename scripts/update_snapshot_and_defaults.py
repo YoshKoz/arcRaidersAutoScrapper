@@ -40,6 +40,7 @@ TARGET_RELATIVE_FILES = (
     "src/autoscrapper/items/items_rules.default.json",
 )
 EXCLUDED_LEVEL2_IDS = {"stash", "workbench"}
+VOLATILE_TIMESTAMP_KEYS = {"generatedAt", "lastUpdated", "lastupdated"}
 
 
 def _load_workshop_level2_map(hideout_modules_path: Path) -> Dict[str, int]:
@@ -104,13 +105,53 @@ def _capture_file_bytes(paths: Iterable[Path]) -> Dict[Path, bytes]:
     return captured
 
 
+def _normalize_for_semantic_diff(value: object) -> object:
+    if isinstance(value, dict):
+        normalized: dict[str, object] = {}
+        for key, nested_value in value.items():
+            if key in VOLATILE_TIMESTAMP_KEYS:
+                continue
+            normalized[key] = _normalize_for_semantic_diff(nested_value)
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_for_semantic_diff(entry) for entry in value]
+    return value
+
+
+def _is_ignorable_timestamp_only_json_diff(before: bytes, after: bytes) -> bool:
+    if not before or not after:
+        return False
+
+    try:
+        before_json = json.loads(before.decode("utf-8"))
+        after_json = json.loads(after.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+
+    return _normalize_for_semantic_diff(before_json) == _normalize_for_semantic_diff(
+        after_json
+    )
+
+
 def _diff_changed_files(
-    before_bytes: Dict[Path, bytes], after_bytes: Dict[Path, bytes]
+    before_bytes: Dict[Path, bytes],
+    after_bytes: Dict[Path, bytes],
+    *,
+    ignore_timestamp_only_diffs: bool = False,
 ) -> list[str]:
     changed: list[str] = []
     for path in sorted(before_bytes.keys(), key=lambda p: str(p)):
-        if before_bytes.get(path, b"") != after_bytes.get(path, b""):
-            changed.append(path.relative_to(REPO_ROOT).as_posix())
+        before_value = before_bytes.get(path, b"")
+        after_value = after_bytes.get(path, b"")
+        if before_value == after_value:
+            continue
+
+        if ignore_timestamp_only_diffs and _is_ignorable_timestamp_only_json_diff(
+            before_value, after_value
+        ):
+            continue
+
+        changed.append(path.relative_to(REPO_ROOT).as_posix())
     return changed
 
 
@@ -190,7 +231,11 @@ def _update_dry_run(source_data_dir: Path) -> dict:
             target_paths[3]: after_bytes[temp_data_dir / "metadata.json"],
             target_paths[4]: after_bytes[temp_rules_path],
         }
-        changed_files = _diff_changed_files(before_bytes, mapped_after)
+        changed_files = _diff_changed_files(
+            before_bytes,
+            mapped_after,
+            ignore_timestamp_only_diffs=True,
+        )
 
         return {
             "snapshot_metadata": snapshot_metadata,
@@ -332,7 +377,11 @@ def main() -> int:
         result = _update_in_place(data_dir, rules_path)
         after_state = _load_state(data_dir, rules_path)
         after_bytes = _capture_file_bytes(target_paths)
-        changed_files = _diff_changed_files(before_bytes, after_bytes)
+        changed_files = _diff_changed_files(
+            before_bytes,
+            after_bytes,
+            ignore_timestamp_only_diffs=True,
+        )
         hideout_levels = result["hideout_levels"]
 
     report = build_report(
